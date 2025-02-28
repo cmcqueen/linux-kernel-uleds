@@ -3,6 +3,7 @@
 import selectors
 import struct
 
+CHAR_DEV_NAME = '/dev/uleds'
 MAX_BRIGHTNESS=255
 
 led_names = ('uleds::test0', 'uleds::test1')
@@ -10,7 +11,7 @@ led_names = ('uleds::test0', 'uleds::test1')
 def uleds_register(names, max_brightness=MAX_BRIGHTNESS):
     uleds_f = []
     for name in names:
-        f = open('/dev/uleds', 'r+b', buffering=0)
+        f = open(CHAR_DEV_NAME, 'r+b', buffering=0)
         name_struct = struct.pack('@64sI', name.encode('utf-8'), max_brightness)
         f.write(name_struct)
         uleds_f.append((name, f))
