@@ -6,6 +6,7 @@
  *
  * Based on uinput.c: Aristeu Sergio Rozanski Filho <aris@cathedrallabs.org>
  */
+#include <linux/ctype.h>
 #include <linux/fs.h>
 #include <linux/init.h>
 #include <linux/leds.h>
@@ -25,13 +26,14 @@ enum uleds_state {
 };
 
 struct uleds_device {
-	struct uleds_user_dev	user_dev;
-	struct led_classdev	led_cdev;
-	struct mutex		mutex;
-	enum uleds_state	state;
-	wait_queue_head_t	waitq;
-	int			brightness;
-	bool			new_data;
+	struct uleds_user_dev		user_dev;
+	struct uleds_user_trigger	default_trigger;
+	struct led_classdev		led_cdev;
+	struct mutex			mutex;
+	enum uleds_state		state;
+	wait_queue_head_t		waitq;
+	int				brightness;
+	bool				new_data;
 };
 
 static struct miscdevice uleds_misc;
@@ -70,15 +72,17 @@ static int uleds_open(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static ssize_t uleds_write(struct file *file, const char __user *buffer,
-			   size_t count, loff_t *ppos)
+static bool is_led_name_valid(const char *name)
 {
-	struct uleds_device *udev = file->private_data;
-	const char *name;
-	int ret;
+	return ((name[0] != '\0') &&
+		(strcmp(name, ".") != 0) &&
+		(strcmp(name, "..") != 0) &&
+		(strchr(name, '/') == NULL));
+}
 
-	if (count == 0)
-		return 0;
+static int dev_setup(struct uleds_device *udev, const char __user *buffer)
+{
+	int ret;
 
 	ret = mutex_lock_interruptible(&udev->mutex);
 	if (ret)
@@ -89,20 +93,13 @@ static ssize_t uleds_write(struct file *file, const char __user *buffer,
 		goto out;
 	}
 
-	if (count != sizeof(struct uleds_user_dev)) {
-		ret = -EINVAL;
-		goto out;
-	}
-
 	if (copy_from_user(&udev->user_dev, buffer,
 			   sizeof(struct uleds_user_dev))) {
 		ret = -EFAULT;
 		goto out;
 	}
 
-	name = udev->user_dev.name;
-	if (!name[0] || !strcmp(name, ".") || !strcmp(name, "..") ||
-	    strchr(name, '/')) {
+	if (!is_led_name_valid(udev->user_dev.name)) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -120,12 +117,28 @@ static ssize_t uleds_write(struct file *file, const char __user *buffer,
 
 	udev->new_data = true;
 	udev->state = ULEDS_STATE_REGISTERED;
-	ret = count;
 
 out:
 	mutex_unlock(&udev->mutex);
 
 	return ret;
+}
+
+static ssize_t uleds_write(struct file *file, const char __user *buffer,
+	size_t count, loff_t *ppos)
+{
+	struct uleds_device *udev = file->private_data;
+	int ret;
+
+	if (count == 0)
+		return 0;
+	if (count != sizeof(struct uleds_user_dev)) {
+		return -EINVAL;
+	}
+	ret = dev_setup(udev, buffer);
+	if (ret < 0)
+		return ret;
+	return count;
 }
 
 static ssize_t uleds_read(struct file *file, char __user *buffer, size_t count,
@@ -179,6 +192,70 @@ static __poll_t uleds_poll(struct file *file, poll_table *wait)
 	return 0;
 }
 
+/*
+ * Trigger name validation: Allow only alphanumeric, hyphen or underscore.
+ */
+static bool is_trigger_name_valid(const char * name)
+{
+	size_t i;
+
+	if (name[0] == '\0')
+		return false;
+
+	for (i = 0; i < TRIG_NAME_MAX; i++) {
+		if (name[i] == '\0')
+			break;
+		if (!isalnum(name[i]) && name[i] != '-' && name[i] != '_')
+			return false;
+	}
+	/* Length check. */
+	return (i < TRIG_NAME_MAX);
+}
+
+static long uleds_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	struct uleds_device *udev = file->private_data;
+	struct uleds_user_trigger default_trigger;
+	int retval = 0;
+
+	switch (cmd) {
+	case ULEDS_IOC_DEV_SETUP:
+		retval = dev_setup(udev, (const char __user *)arg);
+		break;
+
+	case ULEDS_IOC_SET_DEFAULT_TRIGGER:
+		retval = copy_from_user(&default_trigger,
+			(struct uleds_user_trigger __user *)arg,
+			sizeof(default_trigger));
+		if (retval)
+			return retval;
+		retval = mutex_lock_interruptible(&udev->mutex);
+		if (retval)
+			return retval;
+		if (default_trigger.name[0] == '\0') {
+			udev->led_cdev.default_trigger = NULL;
+		} else {
+			if (!is_trigger_name_valid(default_trigger.name)) {
+				mutex_unlock(&udev->mutex);
+				return -EINVAL;
+			}
+			memcpy(&udev->default_trigger, &default_trigger, sizeof(udev->default_trigger));
+			udev->led_cdev.default_trigger = udev->default_trigger.name;
+		}
+		if (udev->state == ULEDS_STATE_REGISTERED) {
+			led_trigger_set_default(&udev->led_cdev);
+		}
+		mutex_unlock(&udev->mutex);
+		break;
+
+	default:
+		retval = -ENOIOCTLCMD;
+		break;
+	}
+
+	return retval;
+}
+
 static int uleds_release(struct inode *inode, struct file *file)
 {
 	struct uleds_device *udev = file->private_data;
@@ -200,6 +277,7 @@ static const struct file_operations uleds_fops = {
 	.read		= uleds_read,
 	.write		= uleds_write,
 	.poll		= uleds_poll,
+	.unlocked_ioctl	= uleds_ioctl,
 };
 
 static struct miscdevice uleds_misc = {
