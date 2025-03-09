@@ -1,22 +1,48 @@
 #!/usr/bin/python3
 
+from enum import IntEnum
+import fcntl
 import selectors
 import struct
+
+# 3rd-party packages
+from ioctl_opt import IOC, IOC_WRITE
+
+led_names = ('uleds::test0', 'uleds::test1')
 
 CHAR_DEV_NAME = '/dev/uleds'
 MAX_BRIGHTNESS=255
 SETUP_FORMAT = '@64sI'
+TRIGGER_FORMAT = '@64s'
 BRIGHTNESS_FORMAT = '@I'
 BRIGHTNESS_SIZE = struct.calcsize(BRIGHTNESS_FORMAT)
 
-led_names = ('uleds::test0', 'uleds::test1')
+class EnumMissingUnknown():
+    @classmethod
+    def _missing_(cls, value):
+        return cls.Unknown
+
+class IOCTL(EnumMissingUnknown, IntEnum):
+    Unknown        = -1
+    ULEDS_IOC_DEV_SETUP             = IOC(IOC_WRITE, ord('l'), 0x01, 68)
+    ULEDS_IOC_SET_DEFAULT_TRIGGER   = IOC(IOC_WRITE, ord('l'), 0x02, 64)
 
 def uleds_register(names, max_brightness=MAX_BRIGHTNESS):
     uleds_f = []
     for name in names:
         f = open(CHAR_DEV_NAME, 'r+b', buffering=0)
+
+        # Set up name and max brightness.
         name_struct = struct.pack(SETUP_FORMAT, name.encode('utf-8'), max_brightness)
-        f.write(name_struct)
+        if False:
+            f.write(name_struct)
+        else:
+            fcntl.ioctl(f, IOCTL.ULEDS_IOC_DEV_SETUP, name_struct)
+
+        # Set default trigger
+        default_trigger_struct = struct.pack(TRIGGER_FORMAT, 'utest0'.encode('utf-8'))
+        fcntl.ioctl(f, IOCTL.ULEDS_IOC_SET_DEFAULT_TRIGGER, default_trigger_struct)
+
         uleds_f.append((name, f))
     return uleds_f
 
