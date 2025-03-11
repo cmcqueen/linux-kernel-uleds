@@ -24,6 +24,12 @@ A new LED class device will be created with the name given. The name can be
 any valid sysfs device node name, but consider using the LED class naming
 convention of "devicename:color:function".
 
+Alternatively, setup can be done with an ioctl call, passing a pointer to
+the structure.
+
+There is also an ioctl call to configure a default trigger for the LED, by
+passing a pointer to a structure containing the name of a trigger.
+
 The current brightness is found by reading an int value from the character
 device. Reading will block until the brightness changes. The device node can
 also be polled to notify when the brightness value changes.
