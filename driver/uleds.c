@@ -208,8 +208,9 @@ static bool is_trigger_name_valid(const char * name)
 		if (!isalnum(name[i]) && name[i] != '-' && name[i] != '_')
 			return false;
 	}
-	/* Length check. */
-	return (i < TRIG_NAME_MAX);
+	/* Length check and avoid any special names. */
+	return ((i < TRIG_NAME_MAX) &&
+		(strcmp(name, "default") != 0));
 }
 
 static long uleds_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
